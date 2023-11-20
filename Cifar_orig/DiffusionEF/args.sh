@@ -1,0 +1,1 @@
+python myDiffusionEF.py --device 0 --batch_size 128 --test_batch_size 128 --resolution 32 --lr 0.001 --weight_decay 0.00001 --alpha 0.02 --num_epochs 50
