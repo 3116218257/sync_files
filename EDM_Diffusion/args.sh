@@ -1,0 +1,1 @@
+python train.py --device 0 --batch_size 256 --test_batch_size 128 --resolution 32 --lr 0.1 --weight_decay 0.001 --k 256 --alpha 0.02 --num_epochs 50
