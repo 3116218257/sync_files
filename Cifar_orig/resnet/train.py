@@ -27,14 +27,14 @@ from torchvision import transforms
 from dataset import CIFAR10Dataset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from model import time_embedded_resnet
+from model import ResNet50, TimeEmbedding
 
 class NeuralEFCLR(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         # self.backbone = torchvision.models.resnet50(zero_init_residual=True)
-        self.backbone = time_embedded_resnet(t_dim=32)
+        self.backbone = ResNet50(num_classes=10)
         #self.backbone = torchvision.models.resnet50(pretrained=True)
         self.backbone.fc = nn.Identity()
 
@@ -61,15 +61,15 @@ class NeuralEFCLR(nn.Module):
         if args.rank == 0 and hasattr(self, 'projector'):
             print(self.projector)
 
-    def forward(self, y1, y2, t, index, labels=None):
+    def forward(self, y1, y2, t_emb, index, labels=None):
         if self.args.not_all_together:
-            r1 = self.backbone(y1, t)
-            r2 = self.backbone(y2, t)
+            r1 = self.backbone(y1, t_emb)
+            r2 = self.backbone(y2, t_emb)
 
             z1 = self.projector(r1)
             z2 = self.projector(r2)
         else:
-            r1, r2 = self.backbone(torch.cat([y1, y2], 0), t).chunk(2, dim=0)
+            r1, r2 = self.backbone(torch.cat([y1, y2], 0), t_emb).chunk(2, dim=0)
             z1, z2 = self.projector(torch.cat([r1, r2], 0)).chunk(2, dim=0)
 
         psi1 = gather_from_all(z1)
@@ -115,32 +115,43 @@ class NeuralEFCLR(nn.Module):
         loss /= psi_K_psi_diag.numel()
         reg /= psi_K_psi_diag.numel()
 
-        if index <= 10:
-            logits = self.online_head(r1.detach())
-            cls_loss = F.cross_entropy(logits, labels)
-            acc = torch.sum(torch.eq(torch.argmax(logits, dim=1), labels)) / logits.size(0)
-        else:
-            cls_loss, acc = torch.Tensor([0.]).to(device), torch.Tensor([0.]).to(device)
+        # if index < 4:
+        #     logits = self.online_head(r1.detach())
+        #     cls_loss = F.cross_entropy(logits, labels)
+        #     acc = torch.sum(torch.eq(torch.argmax(logits, dim=1), labels)) / logits.size(0)
+        # else:
+        cls_loss, acc = torch.Tensor([0.]).to(device), torch.Tensor([0.]).to(device)
 
         return loss, reg, cls_loss, acc
-    
+
+
+def generate_gaussian_noise(mean, std, size):
+    # noise = np.random.normal(mean, std, size)
+    noise = torch.randn(std.shape[0], 3, 32, 32).to(device)
+    noise = noise * std.view(std.shape[0], 1, 1, 1)
+    return noise
+
 def process_input(images, sigma, device):
     y = images
     y = y.to(device)
-    n = torch.randn_like(y) * sigma
+    n = generate_gaussian_noise(mean=0, std=sigma, size=(32, 32))
     n = n.to(device)
-    return y + n
+    return (y + n).float()
+
+ckpt_path = './ckpt/'
         
 if __name__ == '__main__':
+    if not os.path.exists(ckpt_path):
+        os.mkdir(ckpt_path)
 
     parser = argparse.ArgumentParser(description='Learn diffusion eigenfunctions on ImageNet ')
-    parser.add_argument('--device', type=int, default=0)
+    parser.add_argument('--device', type=int, default=4)
     # for the size of image
     parser.add_argument('--resolution', type=int, default=256)
 
     # opt configs
-    parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--test_batch_size', type=int, default=512)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--test_batch_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--min_lr', type=float, default=None, metavar='LR')
     parser.add_argument('--weight_decay', type=float, default=1e-5)
@@ -150,12 +161,12 @@ if __name__ == '__main__':
     parser.add_argument('--opt', type=str, default='adam')
 
     # for neuralef
-    parser.add_argument('--alpha', default=0.02, type=float)
+    parser.add_argument('--alpha', default=0.01, type=float)
     parser.add_argument('--k', default=64, type=int)
     parser.add_argument('--momentum', default=.9, type=float)
     parser.add_argument('--time_dependent', default=False, action='store_true')
-    parser.add_argument('--not_all_together', default=False, action='store_true')
-    parser.add_argument('--proj_dim', default=[2048, 128], type=int, nargs='+')
+    parser.add_argument('--not_all_together', default=True, action='store_true')
+    parser.add_argument('--proj_dim', default=[2048, 1024], type=int, nargs='+')
     parser.add_argument('--no_proj_bn', default=False, action='store_true')
     parser.add_argument('--no_stop_grad', default=False, action='store_true')
     parser.add_argument('--l2_normalize', default=False, action='store_true')
@@ -177,20 +188,21 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = True
 
 
-    t_tabel = torch.arange(0, 1, 0.02)
+    t_tabel = torch.arange(0, 10, 0.01)
 
         
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
     cifar_dataset = CIFAR10Dataset(root_dir='/home/lhy/Projects/EDM_Diffusion/data', train=True, transform=transform)
     cifar_dataset_test = CIFAR10Dataset(root_dir='/home/lhy/Projects/EDM_Diffusion/data', train=False, transform=transform)
     train_data_loader= DataLoader(cifar_dataset, batch_size=args.batch_size, shuffle=True)
     test_data_loader= DataLoader(cifar_dataset_test, batch_size=args.batch_size, shuffle=False)
-
+    
+    model_arch = open('model.txt', 'w')
     model = NeuralEFCLR(args)
-    # print(model)
+    print(model, file=model_arch)
     model.to(device)
     # assert 1==2
 
@@ -211,28 +223,30 @@ if __name__ == '__main__':
         for (image1, image2), labels, classes_name in tqdm(train_data_loader, desc=f"Epoch {epoch+1}/{args.num_epochs}", unit="batch"):
             n_steps += 1
             # cosine decay lr with warmup
-
+            
+            # print(image1)
+            # assert 1==2
             lr = args.lr
             optimizer.zero_grad()
             image1 = image1.to(device)
             image2 = image2.to(device)
             labels = labels.to(device)
 
-            index = int(torch.randint(0, 32, (1,)))
-            t = t_tabel[index].to(device)
-            t = torch.tensor(t).to(device)
-            tmp = torch.zeros(32)
-            tmp[int(index)] = 1
+            index = torch.randint(0, 1000, (image1.shape[0],))
+            #index = torch.randint(0, 1000, (1,))
+            t = t_tabel[index]
+            t = t.to(device)
+
+            image1 = image1.permute(0, 3, 1, 2)
+            image2 = image2.permute(0, 3, 1, 2)
 
             ypn1 = process_input(image1, t, device)
             ypn2 = process_input(image2, t, device)
 
-            t = tmp.to(device)
-
-            ypn1 = ypn1.permute(0, 3, 1, 2)
-            ypn2 = ypn2.permute(0, 3, 1, 2)
-
-            # if(t<3):
+            T_EMB = TimeEmbedding(T=1000, d_model=128, dim=128 * 4)
+            t_emb = T_EMB(index)
+            t_emb= t_emb.to(device)
+            # if(t<100):
             #     tmp1 = ypn1
             #     print(tmp1.shape)
             #     tmp = tmp1[0]
@@ -241,10 +255,10 @@ if __name__ == '__main__':
             #     tmp = tmp * 255
             #     tmp = tmp.byte()
             #     image = transforms.ToPILImage()(tmp)
-            #     image.save(f"./image_noise{float(t)}.jpg")
-            # assert t == 30
+            #     image.save(f"./image_std{float(t)}.jpg")
+            # assert t == 200
 
-            loss, reg, cls_loss, acc = model.forward(ypn1, ypn2, t, index, labels)
+            loss, reg, cls_loss, acc = model.forward(ypn1, ypn2, t_emb, index, labels)
 
             scaler.scale(loss + reg * args.alpha + cls_loss).backward()
             scaler.step(optimizer)
@@ -259,23 +273,51 @@ if __name__ == '__main__':
                           f' reg={reg.item():.6f}, cls_loss={cls_loss.item():.4f}'
                           f' acc={acc.item():.4f},'
                           f' learning_rate={lr:.4f},')
+        if epoch % 5 == 4:
+            torch.save(model, ckpt_path + f'ckpt{epoch+1}.pt')
+                
+        # if epoch % 2 == 0:
+        #     model.eval()
+        #     for (image1, image2), labels, classes_name in tqdm(test_data_loader, desc=f"Testing {epoch+1}", unit="batch"):
+        #         image1 = image1.to(device)
+        #         image2 = image2.to(device)
+        #         labels = labels.to(device)
+
+        #         image1 = image1.permute(0, 3, 1, 2)
+        #         image2 = image2.permute(0, 3, 1, 2)
+                
+        #         t = 0
+                
+        #         ypn1 = process_input(image1, t, device)
+        #         ypn2 = process_input(image2, t, device)
+                
+        #         t = torch.zeros(16)
+        #         t[0] = 1
+        #         t = t.to(device)
+        #         index = 0
+        #         loss, reg, cls_loss, acc = model.forward(ypn1, ypn2, t, index, labels)
+        #         print(f'epoch={epoch + 1}, loss={loss.item():.6f},'
+        #                   f' reg={reg.item():.6f}, cls_loss={cls_loss.item():.4f}'
+        #                   f' acc={acc.item():.4f},')
+        
+            
 
     plt.plot(loss_his, color='blue')
     plt.xlabel('step')
     plt.ylabel('loss')
-    plt.savefig('./loss.png')
+    plt.savefig('./loss_1.png')
     plt.clf()
 
     plt.plot(reg_his, color='green')
     plt.xlabel('step')
     plt.ylabel('reg')
-    plt.savefig('./reg.png')
+    plt.savefig('./reg_1.png')
     plt.clf()
 
     plt.plot(acc_his, color='red')
     plt.xlabel('step')
     plt.ylabel('Acc')
-    plt.savefig(f'./Acc.png')
+    plt.savefig(f'./Acc_1.png')
 
 
 
