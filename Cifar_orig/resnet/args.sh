@@ -1,1 +1,0 @@
-python train.py --data /data/LargeData/Large/ImageNet --batch-size 512  --gpu 1 --name our --dist-port 8873 --mode neuralef --learning-rate 2.4 --alpha 0.0025 --proj_dim 8192 8192 --epochs 20 
