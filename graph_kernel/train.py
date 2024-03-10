@@ -29,8 +29,6 @@ class NeuralEFCLR(nn.Module):
 
         self.backbone = torchvision.models.resnet50(zero_init_residual=True)
         self.backbone.fc = nn.Identity()
-        
-        self.online_head = nn.Linear(2048, 10)
 
         if args.proj_dim[0] == 0:
             self.projector = nn.Identity()
