@@ -3,9 +3,10 @@ import torch
 def get_A(N):
     row_vector = torch.arange(N).unsqueeze(0)
     column_vector = torch.arange(N).unsqueeze(1)
-    exponent = - 2 * torch.abs(row_vector - column_vector)
-    A = 2.0 ** exponent
-
+    # exponent = - 2 * torch.abs(row_vector - column_vector)
+    # A = 2.0 ** exponent
+    
+    A = torch.abs(row_vector - column_vector)
     return A
 
 def get_D(A):
@@ -30,11 +31,12 @@ def expand_matrix(X, batch_size):
 
 if __name__ == '__main__':
     A = get_A(32)
-    D = get_D(A)
-    L, K = get_L_normalized(A, D)
-    print(K)
+    print(A)
+    # D = get_D(A)
+    # L, K = get_L_normalized(A, D)
+    # print(K)
 
-    A = expand_matrix(A, 4)
-    D = expand_matrix(D, 4)
-    L = expand_matrix(L, 4)
-    K = expand_matrix(K, 4)
+    # A = expand_matrix(A, 4)
+    # D = expand_matrix(D, 4)
+    # L = expand_matrix(L, 4)
+    # K = expand_matrix(K, 4)

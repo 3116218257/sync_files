@@ -43,8 +43,10 @@ class video_dataset(Dataset):
         video_path = os.path.join(folder_path, video_files[0])
 
         video = self.read_video(video_path)
+        # print(video.shape)
 
-        video1, video2 = video_sampler(video, self.selected_frames)
+        # video1, video2 = video_sampler(video, self.selected_frames)
+        video1, video2 = video_sampler(video, video.shape[0])
 
         return video1.permute(0, 3, 1, 2), video2.permute(0, 3, 1, 2)
 

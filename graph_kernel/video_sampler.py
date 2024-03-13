@@ -7,8 +7,8 @@ def video_sampler(data, n):
     indices = torch.randperm(num_frames)[:n]
     indices_prim = torch.randperm(num_frames)[:n]
 
-    indices, _ = torch.sort(indices)
-    indices_prim, _ = torch.sort(indices_prim)
+    # indices, _ = torch.sort(indices)
+    # indices_prim, _ = torch.sort(indices_prim)
 
     selected_frames = data[indices, :, :, :]
     selected_frames_prim = data[indices_prim, :, :, :]
