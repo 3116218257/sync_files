@@ -29,6 +29,8 @@ class NeuralEFCLR(nn.Module):
 
         self.backbone = torchvision.models.resnet50(zero_init_residual=True)
         self.backbone.fc = nn.Identity()
+        
+        self.online_head = nn.Linear(2048, 10)
 
         if args.proj_dim[0] == 0:
             self.projector = nn.Identity()
@@ -51,7 +53,7 @@ class NeuralEFCLR(nn.Module):
         if args.rank == 0 and hasattr(self, 'projector'):
             print(self.projector)
 
-    def forward(self, y1, y2):
+    def forward(self, y1, y2, ind1, ind2):
         self.steps += 1
 
         batch_size, frames, channels, row, col = y1.shape
@@ -72,12 +74,11 @@ class NeuralEFCLR(nn.Module):
 
         psi1 = psi1.view(batch_size, frames, args.proj_dim[-1])
         psi2 = psi2.view(batch_size, frames, args.proj_dim[-1])
+        
+        K = get_K(ind1, ind2)
+        K = K.to(args.device)
 
-
-        A = get_A(args.n_frames)
-        D = get_D(A)
-        L, K = get_L_normalized(A, D)
-        K = expand_matrix(K, batch_size).to(args.device)
+        # print(K.shape)
 
         '''
         here,
@@ -88,6 +89,7 @@ class NeuralEFCLR(nn.Module):
         
         '''
         psi_K_psi = torch.transpose(psi1, 1, 2) @ K @ psi2
+
         psi_K_psi = torch.sum(psi_K_psi, dim=0)
         
         if self.steps % 20 == 1:
@@ -99,6 +101,7 @@ class NeuralEFCLR(nn.Module):
             plt.clf()
         
         psi_K_psi_diag = torch.diagonal(psi_K_psi)
+        
 
         # psi_K_psi_diag = psi_K_psi_diag.unsqueeze(1)
 
@@ -127,7 +130,7 @@ if __name__ == '__main__':
         os.mkdir(ckpt_path)
 
     parser = argparse.ArgumentParser(description='Learn eigenfunctions on UCF50')
-    parser.add_argument('--device', type=int, default=1)
+    parser.add_argument('--device', default=1)
 
     # opt configs
     parser.add_argument('--batch_size', type=int, default=1)
@@ -135,8 +138,8 @@ if __name__ == '__main__':
     parser.add_argument('--min_lr', type=float, default=None, metavar='LR')
     parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--warmup_steps', type=int, default=1000, metavar='N', help='iterations to warmup LR')
-    parser.add_argument('--num_epochs', type=int, default=50)
-    parser.add_argument('--n_frames', type=int, default=32)
+    parser.add_argument('--num_epochs', type=int, default=1000)
+    parser.add_argument('--n_frames', type=int, default=64)
 
     # for neuralef
     parser.add_argument('--alpha', default=0.1, type=float)
@@ -155,7 +158,7 @@ if __name__ == '__main__':
     if args.min_lr is None:
         args.min_lr = args.lr * 0.001
 
-    device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
+    device = f'cuda:{args.device}' if torch.cuda.is_available() and args.device != 'cpu' else 'cpu'
     device = torch.device(device)
     torch.backends.cudnn.benchmark = True
 
@@ -164,7 +167,7 @@ if __name__ == '__main__':
     #     # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     # ])
 
-    video_data = video_dataset('./data/UCF50', args.n_frames)
+    video_data = video_dataset('./data/test_one_video', args.n_frames)
     data_loader = DataLoader(video_data, batch_size=args.batch_size, shuffle=True)
     
 
@@ -187,7 +190,7 @@ if __name__ == '__main__':
 
     for epoch in range(args.num_epochs):
         model.train()
-        for video1, video2 in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{args.num_epochs}", unit="batch"):
+        for video1, video2, ind1, ind2 in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{args.num_epochs}", unit="batch"):
             n_steps += 1
             # lr = args.lr
             lr = adjust_learning_rate(args, optimizer, data_loader, n_steps)
@@ -195,8 +198,10 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             video1 = video1.to(device)
             video2 = video2.to(device)
+            ind1 = ind1.to(device)
+            ind2 = ind2.to(device)
 
-            loss, reg = model.forward(video1, video2)
+            loss, reg = model.forward(video1, video2, ind1, ind2)
 
             (loss + reg * args.alpha).backward()
 
@@ -219,7 +224,7 @@ if __name__ == '__main__':
         losses = 0
         n_steps = 0
 
-        if epoch % 2 == 1:
+        if epoch % 200 == 1:
             #######save backbone#########
             torch.save(dict(backbone=model.backbone.state_dict(),
                             projector=model.projector.state_dict()), ckpt_path + f'ckpt{epoch + 1}.pth')

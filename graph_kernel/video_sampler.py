@@ -13,13 +13,14 @@ def video_sampler(data, n):
     selected_frames = data[indices, :, :, :]
     selected_frames_prim = data[indices_prim, :, :, :]
     
-    return selected_frames.to(torch.float), selected_frames_prim.to(torch.float)
+    return selected_frames.to(torch.float), selected_frames_prim.to(torch.float), indices, indices_prim
 
 
 def save_selected_frames(frame, save_path, index):
     # print(frame.shape)
     if not os.path.exists(save_path):
         os.mkdir(save_path)
+
     image = Image.fromarray(frame.numpy())
     image.save(save_path + f"{index}.png")
 
