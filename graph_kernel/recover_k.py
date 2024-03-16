@@ -9,8 +9,6 @@ from torch import nn
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
-from torchvision import transforms
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
@@ -83,6 +81,7 @@ class NeuralEFCLR(nn.Module):
         else:
             norm_ = self.eigennorm
 
+        norm_ = norm_.to(y1.device)
         psi1 = z1
         psi2 = z2
 
@@ -91,8 +90,8 @@ class NeuralEFCLR(nn.Module):
         psi1 = psi1 / norm_ * math.sqrt(self.args.t)
         psi2 = psi2 / norm_ * math.sqrt(self.args.t)
 
-        psi1 = psi1.view(batch_size, frames, args.proj_dim[-1])
-        psi2 = psi2.view(batch_size, frames, args.proj_dim[-1])
+        # psi1 = psi1.view(batch_size, frames, args.proj_dim[-1])
+        # psi2 = psi2.view(batch_size, frames, args.proj_dim[-1])
         
         K = get_K(ind1, ind2, args.coeff)
         K = K.to(args.device)
@@ -105,42 +104,12 @@ class NeuralEFCLR(nn.Module):
         psi_K_psi is [batch, k, k]
         
         '''
-        psi_K_psi = torch.transpose(psi2, 1, 2) @ K @ psi1
-
-        psi_K_psi = torch.sum(psi_K_psi, dim=0)
-
-        B = y1.shape[0]
-        with torch.no_grad():
-            if self.eigenvalues is None:
-                self.eigenvalues = psi_K_psi.diag() / (B**2)
-            else:
-                self.eigenvalues.mul_(0.9).add_(psi_K_psi.diag() / (B**2), alpha = 0.1)
-
-        
-        if self.steps % 20 == 1:
-            mappp = psi_K_psi.detach().cpu()
-            mappp = mappp.numpy()
-            plt.imshow(np.array(mappp), cmap='hot')
-            plt.colorbar()
-            plt.savefig(f'./hot.png')
-            plt.clf()
-        
-        psi_K_psi_diag = torch.diagonal(psi_K_psi)
-        
-        psi2_d_K_psi1 = torch.transpose(psi2.detach(), 1, 2) @ K @ psi1
-        psi1_d_K_psi2 = torch.transpose(psi1.detach(), 1, 2) @ K @ psi2
-
-        psi2_d_K_psi1 = torch.sum(psi2_d_K_psi1, dim=0)
-        psi1_d_K_psi2 = torch.sum(psi1_d_K_psi2, dim=0)
-
-        loss = - psi_K_psi_diag.sum() * 2
-        reg = ((psi2_d_K_psi1) ** 2).triu(1).sum() \
-                + ((psi1_d_K_psi2) ** 2).triu(1).sum()
-
-        loss /= psi_K_psi_diag.numel()
-        reg /= psi_K_psi_diag.numel()
-
-        return loss, reg,
+        psi1 = psi1.view(frames, args.proj_dim[-1])
+        psi2 = psi2.view(frames, args.proj_dim[-1])
+        K = K.view(frames, frames)
+ 
+        k_recover = recover_k(psi1=psi1, psi2=psi2, eigen_value=self.eigenvalues.to(y1.device),)
+        return k_recover
 
 
 ckpt_path = './ckpt/'
@@ -150,15 +119,11 @@ if __name__ == '__main__':
         os.mkdir(ckpt_path)
 
     parser = argparse.ArgumentParser(description='Learn eigenfunctions on UCF50')
-    parser.add_argument('--device', default=2)
+    parser.add_argument('--device', default=1)
 
     # opt configs
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--lr', type=float, default=0.6)
-    parser.add_argument('--min_lr', type=float, default=None, metavar='LR')
-    parser.add_argument('--weight_decay', type=float, default=1e-5)
-    parser.add_argument('--warmup_steps', type=int, default=1000, metavar='N', help='iterations to warmup LR')
-    parser.add_argument('--num_epochs', type=int, default=1500)
+    parser.add_argument('--num_epochs', type=int, default=1)
     parser.add_argument('--n_frames', type=int, default=64)
 
     # for neuralef
@@ -173,101 +138,47 @@ if __name__ == '__main__':
     parser.add_argument('--t', default=10, type=float)
     parser.add_argument('--k', default=1024, type=float)
     parser.add_argument('--coeff', default=1.0, type=float)
-    parser.add_argument('--is_train', default=True, type=bool)
+    parser.add_argument('--is_train', default=False, type=bool)
 
     args = parser.parse_args()
 
     args.proj_bn = not args.no_proj_bn
-    if args.min_lr is None:
-        args.min_lr = args.lr * 0.001
 
     device = f'cuda:{args.device}' if torch.cuda.is_available() and args.device != 'cpu' else 'cpu'
     device = torch.device(device)
     torch.backends.cudnn.benchmark = True
 
-    # transform = transforms.Compose([
-    #     transforms.ToTensor(),
-    #     # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    # ])
-
     video_data = video_dataset('./data/test_data', args.n_frames)
     data_loader = DataLoader(video_data, batch_size=args.batch_size, shuffle=True)
-
+    
 
     model = NeuralEFCLR(args)
     model.to(device)
 
-    # optimizer = LARS(model.parameters(),
-    #                  lr=0, weight_decay=args.weight_decay,
-    #                  weight_decay_filter=exclude_bias_and_norm,
-    #                  lars_adaptation_filter=exclude_bias_and_norm)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    losses, regs, n_steps = 0, 0, 0
-
-    loss_his = []
-    reg_his = []
-
-    pretrian_log = open('pretrain_log.txt', 'w')
+    if not args.is_train:
+        state_dict = torch.load('./ckpt/ckpt1001.pth', map_location='cpu')
+        model.load_state_dict(state_dict, strict=False)
+        model.register_buffer('eigenvalues', state_dict['eigenvalues'])
+        model.register_buffer('eigennorm', state_dict['eigennorm'])
 
     for epoch in range(args.num_epochs):
-        model.train()
+        model.eval()
         for video1, video2, ind1, ind2 in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{args.num_epochs}", unit="batch"):
-            n_steps += 1
-            # lr = args.lr
-            lr = adjust_learning_rate(args, optimizer, data_loader, n_steps)
-
-            optimizer.zero_grad()
             video1 = video1.to(device)
             video2 = video2.to(device)
             ind1 = ind1.to(device)
             ind2 = ind2.to(device)
 
-            loss, reg = model.forward(video1, video2, ind1, ind2)
+            K = model.forward(video1, video2, ind1, ind2)
+            print(K, "\n", torch.abs(ind1 - ind2))
+            x_data = torch.abs(ind1 - ind2).squeeze(0).cpu().detach().numpy()
+            y_data = K.cpu().detach().numpy()
+            plt.scatter(x_data, y_data)
+            plt.savefig("ind-k_recover.jpg")
 
-            (loss + reg * args.alpha).backward()
 
-            optimizer.step()
 
-            losses += loss.item()
-            regs += reg.item()
 
-            if n_steps % 20 == 19:
-                print(f'epoch={epoch + 1}, loss={loss.item():.6f},'
-                      f' reg={reg.item():.6f},'
-                      f' learning_rate={lr:.4f},')
-                print(f'epoch={epoch + 1}, loss={loss.item():.6f},'
-                      f' reg={reg.item():.6f},'
-                      f' learning_rate={lr:.4f},', file=pretrian_log)
 
-        loss_his.append(1.0 * losses / n_steps)
-        reg_his.append(1.0 * regs / n_steps)
-        regs = 0
-        losses = 0
-        n_steps = 0
 
-        if epoch % 200 == 1:
-            #######save backbone#########
-            torch.save(dict(model=model.state_dict(),
-                            eigenvalues=model.eigenvalues,
-                            eigennorm=model.eigennorm),
-                              ckpt_path + f'ckpt{epoch}.pth')
-
-  
-
-    if not os.path.exists("./figs"):
-        os.mkdir("./figs")
-
-    plt.plot(loss_his, color='blue')
-    plt.xlabel('step')
-    plt.ylabel('loss')
-    plt.savefig('./figs/loss.png')
-    plt.clf()
-
-    plt.plot(reg_his, color='green')
-    plt.xlabel('step')
-    plt.ylabel('reg')
-    plt.savefig('./figs/reg.png')
-    plt.clf()
 
