@@ -5,8 +5,9 @@ import os
 def video_sampler(data, n):
     num_frames, c, h, w = data.shape
     indices = torch.randperm(num_frames)[:n]
-    indices_prim = torch.randperm(num_frames)[:n]
-
+    # indices_prim = torch.randperm(num_frames)[:n]
+    indices_prim = indices
+    
     # indices, _ = torch.sort(indices)
     # indices_prim, _ = torch.sort(indices_prim)
 

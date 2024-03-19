@@ -127,6 +127,22 @@ class NeuralEFCLR(nn.Module):
             plt.colorbar()
             plt.savefig(f'./hot.png')
             plt.clf()
+            
+            mappp = K[0].cpu()
+            mappp = mappp.numpy()
+            plt.imshow(np.array(mappp), cmap='hot')
+            plt.colorbar()
+            plt.savefig(f'./origin_k.png')
+            plt.clf()
+            
+            mappp = recover_k(psi1=psi1.view(frames, args.proj_dim[-1]),
+                              psi2=psi2.view(frames, args.proj_dim[-1]),
+                                             eigen_value=self.eigenvalues)
+            mappp = mappp.numpy()
+            plt.imshow(np.array(mappp), cmap='hot')
+            plt.colorbar()
+            plt.savefig(f'./recover_k.png')
+            plt.clf()
         
         psi_K_psi_diag = torch.diagonal(psi_K_psi)
         
@@ -157,7 +173,7 @@ if __name__ == '__main__':
 
     # opt configs
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--lr', type=float, default=0.6)
+    parser.add_argument('--lr', type=float, default=0.06)
     parser.add_argument('--min_lr', type=float, default=None, metavar='LR')
     parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--warmup_steps', type=int, default=1000, metavar='N', help='iterations to warmup LR')
@@ -165,16 +181,16 @@ if __name__ == '__main__':
     parser.add_argument('--n_frames', type=int, default=64)
 
     # for neuralef
-    parser.add_argument('--alpha', default=1.0, type=float)
+    parser.add_argument('--alpha', default=0.4, type=float)
     # parser.add_argument('--k', default=64, type=int)
     parser.add_argument('--momentum', default=.9, type=float)
     parser.add_argument('--not_all_together', default=True, action='store_true')
-    parser.add_argument('--proj_dim', default=[2048, 2048], type=int, nargs='+')
+    parser.add_argument('--proj_dim', default=[2048, 64], type=int, nargs='+')
     parser.add_argument('--no_proj_bn', default=False, action='store_true')
     parser.add_argument('--rank', default=0, type=int,
                         help='node rank for distributed training')
     parser.add_argument('--t', default=10, type=float)
-    parser.add_argument('--k', default=2048, type=float)
+    parser.add_argument('--k', default=64, type=float)
     parser.add_argument('--coeff', default=1.0, type=float)
     parser.add_argument('--is_train', default=True, type=bool)
 
