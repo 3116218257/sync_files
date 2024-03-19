@@ -107,9 +107,11 @@ class NeuralEFCLR(nn.Module):
         psi1 = psi1.view(frames, args.proj_dim[-1])
         psi2 = psi2.view(frames, args.proj_dim[-1])
         K = K.view(frames, frames)
+        
+        k_origin = get_K(ind1, ind2, 1.0)
  
-        k_recover = recover_k(psi1=psi1, psi2=psi2, eigen_value=self.eigenvalues.to(y1.device),)
-        return k_recover
+        k_recover = recover_k(psi1=psi1, psi2=psi2, eigen_value=self.eigenvalues,)
+        return k_recover, k_origin
 
 
 ckpt_path = './ckpt/'
@@ -123,8 +125,8 @@ if __name__ == '__main__':
 
     # opt configs
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_epochs', type=int, default=1)
-    parser.add_argument('--n_frames', type=int, default=64)
+    parser.add_argument('--num_epochs', type=int, default=400)
+    parser.add_argument('--n_frames', type=int, default=32)
 
     # for neuralef
     parser.add_argument('--alpha', default=0.5, type=float)
@@ -156,25 +158,39 @@ if __name__ == '__main__':
     model.to(device)
 
     if not args.is_train:
-        state_dict = torch.load('./ckpt/ckpt1001.pth', map_location='cpu')
+        state_dict = torch.load('./ckpt/ckpt1801.pth', map_location='cpu')
         model.load_state_dict(state_dict, strict=False)
         model.register_buffer('eigenvalues', state_dict['eigenvalues'])
         model.register_buffer('eigennorm', state_dict['eigennorm'])
+        model.eigenvalues = model.eigenvalues.to(device)
+        model.eigennorm =  model.eigennorm.to(device)
+        
+        print(model.eigenvalues)
+        print(model.eigennorm)
 
+    model.eval()
     for epoch in range(args.num_epochs):
-        model.eval()
+
         for video1, video2, ind1, ind2 in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{args.num_epochs}", unit="batch"):
             video1 = video1.to(device)
             video2 = video2.to(device)
             ind1 = ind1.to(device)
             ind2 = ind2.to(device)
 
-            K = model.forward(video1, video2, ind1, ind2)
-            print(K, "\n", torch.abs(ind1 - ind2))
-            x_data = torch.abs(ind1 - ind2).squeeze(0).cpu().detach().numpy()
+            K, k_orig = model.forward(video1, video2, ind1, ind2)
+            # print(K, "\n", torch.abs(ind1 - ind2))
+            # x_data = torch.abs(ind1 - ind2).squeeze(0).cpu().detach().numpy()
+            x_data = (ind1 - ind2).squeeze(0).cpu().detach().numpy()
             y_data = K.cpu().detach().numpy()
+            # ef = model.eigenvalues.cpu().detach().numpy()
+
+            # plt.plot(ef)
+            # plt.savefig("eigen.jpg")
+
+            # plt.clf()
             plt.scatter(x_data, y_data)
-            plt.savefig("ind-k_recover.jpg")
+            #plt.plot(x_data, y_data)
+    plt.savefig("ind-k_recover.jpg")
 
 
 

@@ -14,7 +14,7 @@ from torchvision import transforms
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from tools import LARS, adjust_learning_rate
+from tools import LARS, adjust_learning_rate, gather_from_all
 from get_matrix import *
 from video_sampler import *
 from dataset import video_dataset
@@ -54,7 +54,7 @@ class NeuralEFCLR(nn.Module):
 
         self.training = args.is_train
         self.momentum = args.momentum
-        self.register_buffer('eigennorm', torch.zeros(args.k))
+        self.register_buffer('eigennorm_sqr', torch.zeros(args.k))
         self.register_buffer('num_calls', torch.Tensor([0]))
         self.register_buffer('eigenvalues', None)
 
@@ -66,22 +66,25 @@ class NeuralEFCLR(nn.Module):
         y1 = y1.view(batch_size * frames, channels, row, col)
         y2 = y2.view(batch_size * frames, channels, row, col)
 
-        r1 = self.backbone(y1)
-        r2 = self.backbone(y2)
 
-        z1 = self.projector(r1)
-        z2 = self.projector(r2)
+        r1, r2 = self.backbone(torch.cat([y1, y2], 0)).chunk(2, dim=0)
+
+        z1, z2 = self.projector(torch.cat([r1, r2], 0)).chunk(2, dim=0)
+        
+        psi1 = gather_from_all(z1)
+        psi2 = gather_from_all(z2)
         
         if self.training:
-            norm_ = z1.norm(dim=0) / math.sqrt(np.prod([z1.shape[0]]))
+            norm_ = (psi1.norm(dim=0) ** 2 + psi2.norm(dim=0) ** 2) / (psi1.shape[0] + psi2.shape[0])
             with torch.no_grad():
                 if self.num_calls == 0:
-                    self.eigennorm.copy_(norm_.data)
+                    self.eigennorm_sqr.copy_(norm_.data)
                 else:
-                    self.eigennorm.mul_(self.momentum).add_(norm_.data, alpha = 1-self.momentum)
+                    self.eigennorm_sqr.mul_(self.momentum).add_(norm_.data, alpha = 1-self.momentum)
                 self.num_calls += 1
+            norm_ = norm_.sqrt()
         else:
-            norm_ = self.eigennorm
+            norm_ = self.eigennorm_sqr.sqrt()
 
         psi1 = z1
         psi2 = z2
@@ -158,20 +161,20 @@ if __name__ == '__main__':
     parser.add_argument('--min_lr', type=float, default=None, metavar='LR')
     parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--warmup_steps', type=int, default=1000, metavar='N', help='iterations to warmup LR')
-    parser.add_argument('--num_epochs', type=int, default=1500)
+    parser.add_argument('--num_epochs', type=int, default=2000)
     parser.add_argument('--n_frames', type=int, default=64)
 
     # for neuralef
-    parser.add_argument('--alpha', default=0.5, type=float)
+    parser.add_argument('--alpha', default=1.0, type=float)
     # parser.add_argument('--k', default=64, type=int)
     parser.add_argument('--momentum', default=.9, type=float)
     parser.add_argument('--not_all_together', default=True, action='store_true')
-    parser.add_argument('--proj_dim', default=[2048, 1024], type=int, nargs='+')
+    parser.add_argument('--proj_dim', default=[2048, 2048], type=int, nargs='+')
     parser.add_argument('--no_proj_bn', default=False, action='store_true')
     parser.add_argument('--rank', default=0, type=int,
                         help='node rank for distributed training')
     parser.add_argument('--t', default=10, type=float)
-    parser.add_argument('--k', default=1024, type=float)
+    parser.add_argument('--k', default=2048, type=float)
     parser.add_argument('--coeff', default=1.0, type=float)
     parser.add_argument('--is_train', default=True, type=bool)
 
@@ -251,7 +254,7 @@ if __name__ == '__main__':
             #######save backbone#########
             torch.save(dict(model=model.state_dict(),
                             eigenvalues=model.eigenvalues,
-                            eigennorm=model.eigennorm),
+                            eigennorm=model.eigennorm_sqr),
                               ckpt_path + f'ckpt{epoch}.pth')
 
   
